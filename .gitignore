@@ -1,0 +1,17 @@
+# Built binaries
+/kubelet-csr-approver
+/bin/
+/out/
+
+# Go test/coverage artifacts
+*.test
+*.out
+coverage.txt
+
+# Editor / OS detritus
+.idea/
+.vscode/
+.DS_Store
+
+# Local agent / tool settings
+.claude/

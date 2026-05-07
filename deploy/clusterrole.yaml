@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubelet-csr-approver
+  labels:
+    app.kubernetes.io/name: kubelet-csr-approver
+rules:
+  # Read Nodes to enforce SAN allowlist (rules 9, 10) and Node existence (rule 8).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Read CSRs to evaluate them.
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["get", "list", "watch"]
+
+  # Apply the approval / denial decision.
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests/approval"]
+    verbs: ["update"]
+
+  # Authorize approval *for this signer only*. Without this, the apiserver
+  # rejects the UpdateApproval call regardless of the verb above.
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["signers"]
+    resourceNames: ["kubernetes.io/kubelet-serving"]
+    verbs: ["approve"]
