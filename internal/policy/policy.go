@@ -113,9 +113,19 @@ func Evaluate(csr *certv1.CertificateSigningRequest, node *corev1.Node) (Decisio
 		return Deny, ReasonOrganizationInvalid
 	}
 
-	// Rule 7: usages exactly {digital signature, key encipherment, server auth}.
-	// In particular, "client auth" is forbidden — this is a serving cert.
-	if !usagesExactlyServerAuth(csr.Spec.Usages) {
+	// Rule 7: usages must include {server auth, digital signature} and may
+	// additionally include {key encipherment}. No other entries are allowed.
+	// In particular, "client auth" is forbidden — this is a serving cert,
+	// not a client cert.
+	//
+	// The original spec called for "exactly {digital signature, key
+	// encipherment, server auth}", but real kubelets using ECDSA keys
+	// (P-256 by default since at least Kubernetes 1.19) deliberately
+	// OMIT key encipherment — that usage is only meaningful for RSA key
+	// transport and ECDSA TLS server auth never needs it. We accept both
+	// shapes; the security-critical invariant (no client auth, no surprise
+	// EKUs) is unchanged.
+	if !usagesValidForServerAuth(csr.Spec.Usages) {
 		return Deny, ReasonUsagesInvalid
 	}
 
@@ -261,23 +271,27 @@ func canonDNS(s string) string {
 	return strings.ToLower(strings.TrimSuffix(s, "."))
 }
 
-// usagesExactlyServerAuth checks that have == {DigitalSignature, KeyEncipherment, ServerAuth}.
-// Order doesn't matter; duplicates and extras are rejected.
-func usagesExactlyServerAuth(have []certv1.KeyUsage) bool {
-	want := map[certv1.KeyUsage]bool{
+// usagesValidForServerAuth returns true iff have:
+//   - contains both ServerAuth and DigitalSignature (required for TLS server auth)
+//   - contains no entries outside {ServerAuth, DigitalSignature, KeyEncipherment}
+//   - contains no duplicates
+//
+// KeyEncipherment is allowed but not required: it's only meaningful for RSA
+// key transport, and modern kubelets using ECDSA P-256 keys omit it. The
+// security-critical clause is the closed allowlist — ClientAuth and any
+// other surprise EKU are rejected by the second bullet.
+func usagesValidForServerAuth(have []certv1.KeyUsage) bool {
+	allowed := map[certv1.KeyUsage]bool{
+		certv1.UsageServerAuth:       true,
 		certv1.UsageDigitalSignature: true,
 		certv1.UsageKeyEncipherment:  true,
-		certv1.UsageServerAuth:       true,
-	}
-	if len(have) != len(want) {
-		return false
 	}
 	seen := make(map[certv1.KeyUsage]bool, len(have))
 	for _, u := range have {
-		if !want[u] || seen[u] {
+		if !allowed[u] || seen[u] {
 			return false
 		}
 		seen[u] = true
 	}
-	return len(seen) == len(want)
+	return seen[certv1.UsageServerAuth] && seen[certv1.UsageDigitalSignature]
 }

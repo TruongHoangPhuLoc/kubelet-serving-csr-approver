@@ -267,6 +267,23 @@ func TestEvaluate(t *testing.T) {
 		},
 		// ---- rule 7 ---------------------------------------------------------
 		{
+			// Real kubelets using ECDSA keys (P-256, default for years) submit
+			// CSRs with exactly these two usages — key encipherment is omitted
+			// because it's only meaningful for RSA key transport. Locked in
+			// after finding this on a real cluster: every CSR from k8s-worker-
+			// node-02 was being denied UsagesInvalid by the original
+			// "exactly three" check.
+			name: "rule 7: ECDSA-style usages (no key encipherment) approve",
+			mutate: func(c *certv1.CertificateSigningRequest) {
+				c.Spec.Usages = []certv1.KeyUsage{
+					certv1.UsageDigitalSignature,
+					certv1.UsageServerAuth,
+				}
+			},
+			want:       Approve,
+			wantReason: ReasonApproved,
+		},
+		{
 			name: "rule 7: missing server auth",
 			mutate: func(c *certv1.CertificateSigningRequest) {
 				c.Spec.Usages = []certv1.KeyUsage{
