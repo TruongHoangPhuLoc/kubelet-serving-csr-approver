@@ -63,19 +63,21 @@ jobs:
 
       - name: Deploy controller
         # Apply our deploy/ overlay with the locally-built image substituted.
+        # The overlay sits at the workspace root so `../deploy` resolves
+        # correctly — kustomize rejects absolute paths in `resources:`.
         run: |
-          mkdir -p /tmp/e2e-overlay
-          cat <<EOF > /tmp/e2e-overlay/kustomization.yaml
+          mkdir -p _e2e_overlay
+          cat <<'EOF' > _e2e_overlay/kustomization.yaml
           apiVersion: kustomize.config.k8s.io/v1beta1
           kind: Kustomization
           resources:
-            - $GITHUB_WORKSPACE/deploy
+            - ../deploy
           images:
             - name: ghcr.io/truonghoangphuloc/kubelet-serving-csr-approver
               newName: kubelet-csr-approver
               newTag: e2e
           EOF
-          kubectl apply -k /tmp/e2e-overlay
+          kubectl apply -k _e2e_overlay
 
       - name: Wait for controller pod to be Ready
         run: |
