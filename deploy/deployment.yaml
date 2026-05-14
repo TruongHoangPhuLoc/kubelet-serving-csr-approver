@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kubelet-csr-approver
-  namespace: kubelet-csr-approver
+  namespace: kube-system
   labels:
     app.kubernetes.io/name: kubelet-csr-approver
 spec:

@@ -4,8 +4,11 @@ kind: Kustomization
 # Plain Kustomize base. Consumers (e.g. the home-lab repo's ArgoCD Application)
 # overlay this with their own image tag, namespace, or environment-specific
 # patches. Don't accumulate environment defaults here.
+#
+# The controller installs into kube-system (it's a cluster-system component
+# alongside kube-controller-manager and friends). No Namespace manifest is
+# shipped — kube-system always exists.
 resources:
-  - namespace.yaml
   - serviceaccount.yaml
   - clusterrole.yaml
   - clusterrolebinding.yaml

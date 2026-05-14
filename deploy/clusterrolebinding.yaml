@@ -11,4 +11,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: kubelet-csr-approver
-    namespace: kubelet-csr-approver
+    namespace: kube-system
