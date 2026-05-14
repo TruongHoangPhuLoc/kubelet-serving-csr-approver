@@ -1,0 +1,172 @@
+name: e2e
+
+# End-to-end smoke test. Spins up a real kind cluster (kubelet with
+# serverTLSBootstrap on), deploys this controller, and asserts that the
+# CSR the kind node submitted at startup gets Approved and signed. If
+# this passes, the whole flow — kubelet → apiserver → our controller →
+# KCM → status.certificate — is wired correctly.
+#
+# Decoupled from ci.yaml on purpose: a failure here gives a distinct
+# signal from unit/integration failures, and it doesn't gate the image
+# build (the controller still ships if e2e is flaky on infrastructure
+# we don't control).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: kind smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build controller image
+        # Local-only build; no push. We load this directly into kind.
+        run: docker build -t kubelet-csr-approver:e2e .
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          config: test/e2e/kind-config.yaml
+          cluster_name: kubelet-csr-approver-e2e
+          wait: 120s
+
+      - name: Load image into kind
+        run: |
+          kind load docker-image kubelet-csr-approver:e2e \
+            --name kubelet-csr-approver-e2e
+
+      - name: Show initial state (kubelet-serving CSRs should be pending)
+        run: |
+          echo "=== nodes ==="
+          kubectl get nodes -o wide
+          echo "=== CSRs ==="
+          kubectl get csr -o wide
+          echo "=== kubelet-serving CSRs specifically ==="
+          kubectl get csr -o json | jq -r '
+            .items[]
+            | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+            | [.metadata.name, .spec.username, ((.status.conditions // []) | map(.type) | join(","))]
+            | @tsv
+          '
+
+      - name: Deploy controller
+        # Apply our deploy/ overlay with the locally-built image substituted.
+        run: |
+          mkdir -p /tmp/e2e-overlay
+          cat <<EOF > /tmp/e2e-overlay/kustomization.yaml
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - $GITHUB_WORKSPACE/deploy
+          images:
+            - name: ghcr.io/truonghoangphuloc/kubelet-serving-csr-approver
+              newName: kubelet-csr-approver
+              newTag: e2e
+          EOF
+          kubectl apply -k /tmp/e2e-overlay
+
+      - name: Wait for controller pod to be Ready
+        run: |
+          kubectl -n kube-system rollout status deployment/kubelet-csr-approver \
+            --timeout=120s
+
+      - name: Wait for kubelet-serving CSRs to be decided
+        # The CSR the kubelet submitted at kind boot is sitting pending until
+        # our controller comes up. Once it does, decision should land within
+        # a second or two. We poll with a generous timeout for CI variance.
+        run: |
+          for i in $(seq 1 30); do
+            pending=$(kubectl get csr -o json | jq -r '
+              [.items[]
+                | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+                | select((.status.conditions // []) | length == 0)
+              ] | length
+            ')
+            echo "[t+${i}s] pending kubelet-serving CSRs: $pending"
+            if [ "$pending" = "0" ]; then
+              echo "all kubelet-serving CSRs have a decision"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Assert at least one CSR was Approved by us
+        run: |
+          approved=$(kubectl get csr -o json | jq -r '
+            [.items[]
+              | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+              | select((.status.conditions // []) | any(.type == "Approved"))
+            ] | length
+          ')
+          echo "approved kubelet-serving CSRs: $approved"
+          if [ "$approved" -lt 1 ]; then
+            echo "FAIL: no kubelet-serving CSR was Approved"
+            exit 1
+          fi
+
+      - name: Assert KCM signed at least one CSR (status.certificate populated)
+        # Our controller only sets the Approved condition. KCM watches for
+        # that and writes the signed cert into status.certificate. This
+        # assertion proves the entire chain works, not just our piece.
+        run: |
+          signed=$(kubectl get csr -o json | jq -r '
+            [.items[]
+              | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+              | select((.status.certificate // "") != "")
+            ] | length
+          ')
+          echo "signed kubelet-serving CSRs: $signed"
+          if [ "$signed" -lt 1 ]; then
+            echo "FAIL: no kubelet-serving CSR has status.certificate"
+            exit 1
+          fi
+
+      - name: Assert decision reason was Approved (not some other approver)
+        # If a different approver got there first, the Approved condition
+        # exists but with a different reason. This assertion confirms it
+        # was *us* that did the work, not some other component in kind.
+        run: |
+          ours=$(kubectl get csr -o json | jq -r '
+            [.items[]
+              | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+              | select((.status.conditions // []) | any(.type == "Approved" and .reason == "Approved"))
+            ] | length
+          ')
+          echo "CSRs approved by our controller specifically: $ours"
+          if [ "$ours" -lt 1 ]; then
+            echo "FAIL: no CSR carries our controller's reason=Approved"
+            kubectl get csr -o json | jq '.items[] | select(.spec.signerName == "kubernetes.io/kubelet-serving") | .status.conditions'
+            exit 1
+          fi
+
+      - name: Dump state for debugging
+        # Always run — useful even on success to confirm what passed.
+        if: always()
+        run: |
+          echo "=== final CSR state ==="
+          kubectl get csr -o wide || true
+          echo
+          echo "=== full kubelet-serving CSR detail ==="
+          kubectl get csr -o json | jq '
+            .items[]
+            | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+            | {name: .metadata.name, username: .spec.username, conditions: .status.conditions, hasCert: ((.status.certificate // "") != "")}
+          ' || true
+          echo
+          echo "=== controller pod ==="
+          kubectl -n kube-system describe deployment kubelet-csr-approver || true
+          echo
+          echo "=== controller logs ==="
+          kubectl -n kube-system logs -l app.kubernetes.io/name=kubelet-csr-approver --tail=200 || true

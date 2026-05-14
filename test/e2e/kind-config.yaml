@@ -1,0 +1,18 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+# Single-node cluster — minimal blast radius, fastest startup. kind 0.20+
+# removes the control-plane NoSchedule taint by default on single-node
+# clusters, so workloads (including our controller) schedule fine here.
+nodes:
+  - role: control-plane
+    # Patch the kubelet config so kubelet submits a kubelet-serving CSR at
+    # startup instead of generating a self-signed cert and never talking
+    # to us. Without this knob, the controller has nothing to react to
+    # and the e2e flow is meaningless.
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        apiVersion: kubelet.config.k8s.io/v1beta1
+        serverTLSBootstrap: true
+        rotateCertificates: true
