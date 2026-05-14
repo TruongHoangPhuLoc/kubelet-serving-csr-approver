@@ -100,12 +100,16 @@ The Go toolchain auto-downloads (`go.mod` declares `go 1.26`).
   per decision; metrics for decision counts, pending CSRs, reconcile
   duration.
 
-## Learning the codebase
+## Documentation
 
-If you know Kubernetes but are new to Go controllers, start with
-[`docs/walkthrough.md`](docs/walkthrough.md) — a guided tour of how the
-control loop works, what each file does, the gotchas that confused the
-author when learning this pattern, and a glossary.
+- **Operating it: [`docs/usage.md`](docs/usage.md)** — install, enable on
+  kubelets, verify, inspect CSRs and certificates, decode denial reasons,
+  troubleshoot, upgrade, rollback, security model. Start here if you just
+  want to *use* this thing.
+- **Understanding it: [`docs/walkthrough.md`](docs/walkthrough.md)** —
+  guided tour of the control loop, what each file does, gotchas that
+  confused the author when learning controller-runtime, plus a glossary.
+  Read this if you want to know how it works under the hood.
 
 ## License
 
